@@ -1,4 +1,6 @@
 import sys,os
+import pandas as pd
+
 sys.path.append(os.path.dirname(os.path.abspath("__file__")))
 if os.name=="nt":
     sys.path.append(os.path.dirname(os.path.abspath("__file__"))+"\\src")
@@ -43,25 +45,39 @@ def consistency_test():
 
 def process_cell_test():
     # test process_cell
-    # umbl_cell_nums = [152097,152091,152051,152087,152042,152094,152045,152054,152039,152065,152041,152046,152057,152078,152033,152088,152036,152084,152085,152047,152072,152048]
-    # umbl_cells = ['UMBL2022FEB' +'_CELL' + f'{cell:03d}' for cell in umbl_cell_nums]
-    cell_names = ["GMFEB23S_CELL003"]
-    cell_names=["GMJuly2022_CELL"+f'{cell_num:03d}' for cell_num in range(21,50) ]
+    umbl_cell_nums_neware = [152065,152041,152046,152057,152078,152033,152088,152036,152084,152085,152047,152072,152048, 152097, 152091,152051,152087,152042,152094,152045,152054,152039,]
+    umbl_cell_nums_arbin = [152066, 152060, 152069,152061, 152093,152076,152052,152079,152089,152063,152068,152075,152055,152050,152067,152077,152059,152056,152058,152053,152082] #152070, 152062, 152086
+    umbl_cell_nums = [152048] #umbl_cell_nums_arbin + umbl_cell_nums_neware 
+    # done = 152070, 152062, 152086
+    # LLI/LAM error cells
+    # umbl_cell_nums = [152056, 152059, 152077, 152052, 152055, 152068, 152075, 152079, 152082, 152050, 152062, 152067, 152039]
+    umbl_cells = ['UMBL2022FEB' +'_CELL' + f'{cell:03d}' for cell in umbl_cell_nums]
+    # cell_names = ["GMFEB23S_CELL003"]
+    # cell_names=["GMJuly2022_CELL"+f'{cell_num:03d}' for cell_num in range(21,50) ]
     # cell_names=["GMFEB23S_CELL"+f'{cell_num:03d}' for cell_num in range(5,77) ]
-    
+    cell_names = umbl_cells
+
+    cell_errors = [] # init list of dict with cell name and error message
     for cell_name in cell_names:
-        viewer = Viewer()
-        presenter = Presenter(viewer=viewer)
-        dataManager = DataManager(presenter=presenter ,use_redis=False)
+        try:
+            viewer = Viewer()
+            presenter = Presenter(viewer=viewer)
+            dataManager = DataManager(presenter=presenter ,use_redis=False)
 
-        # test process_cell
+            # test process_cell
 
-        cell_cycle_metrics, cell_data, cell_data_vdf, cell_data_rpt, junk = dataManager.process_cell(cell_name, reset=True);#, reset=True)#, start_time='2023-07-01_00-00-00', end_time='2023-07-28_23-59-59')
-    #    cell_cycle_metrics, cell_data, cell_data_vdf, cell_data_rpt = dataManager.process_cell(cell_name, reset=True, start_time='2022-09-13_10-00-00', end_time='2022-09-24_10-00-00');#, reset=True)#)
+            cell_cycle_metrics, cell_data, cell_data_vdf, cell_data_rpt, junk = dataManager.process_cell(cell_name, reset=True);#, reset=True)#, start_time='2023-07-01_00-00-00', end_time='2023-07-28_23-59-59')
+        #    cell_cycle_metrics, cell_data, cell_data_vdf, cell_data_rpt = dataManager.process_cell(cell_name, reset=True, start_time='2022-09-13_10-00-00', end_time='2022-09-24_10-00-00');#, reset=True)#)
+        except Exception as error:
+            print("An exception occurred:", error) 
+            cell_error = {'name': cell_name, 'error': error}
+            cell_errors.append(cell_error) # make a list of unprocessed cells and errors
 
-        # Returns the number of
-        # objects it has collected
-        # and deallocated
+        # Display cells that couldn't be processed and their errors
+        df_errors = pd.DataFrame.from_dict(cell_errors)
+        print(df_errors)
+
+        # Returns the number of objects it has collected and deallocated
         collected = gc.collect()
         
         # Prints Garbage collector 

@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import time
 from scipy import integrate, interpolate
-from scipy.signal import find_peaks, medfilt, savgol_filter
+from scipy.signal import find_peaks, medfilt, savgol_filter, butter, sosfiltfilt
 from scipy.optimize import Bounds, NonlinearConstraint, minimize
 from itertools import compress
 import ruptures as rpt
@@ -112,7 +112,7 @@ class DataProcessor:
         if len(records_vdf)==0: 
             self.logger.info("No vdf data for this cell")
            
-            cell_data_vdf = pd.DataFrame(columns=['Time [ms]','Expansion [-]','Expansion [um]', 'Expansion ref [-]', 'Temperature [degC]','cycle_indicator','Expansion STDEV [cnt]','Ref STDEV [cnt]','Drive Current [-]'])
+            cell_data_vdf = pd.DataFrame(columns=['Time [ms]','Raw expansion [-]','Raw expansion [um]', 'Expansion [-]','Expansion [um]','Expansion ref [-]', 'Temperature [degC]','cycle_indicator','Expansion STDEV [cnt]','Ref STDEV [cnt]','Drive Current [-]'])
             cell_cycle_metrics['Max cycle expansion [-]'] = np.nan
             cell_cycle_metrics['Min cycle expansion [-]'] = np.nan
             cell_cycle_metrics['Reversible cycle expansion [-]'] = np.nan
@@ -277,7 +277,7 @@ class DataProcessor:
       
     def summarize_rpt_data(self, cell_data, cell_data_vdf, cell_cycle_metrics, project_name):
         """
-        Get the summary data for each RPT file
+        Identify files with RPTs, process RPT metrics, and save the summary data for each RPT file
 
         Parameters
         ----------
@@ -306,12 +306,15 @@ class DataProcessor:
             project_settings = PROJECT['DEFAULT']
         pulse_currents = project_settings['pulse_currents']
         I_C20 = project_settings['I_C20']
+        I_threshold = project_settings['I_threshold']
 
         # for each RPT file (not sure what it'll do if there are multiple RPT files for 1 RPT...)
         for j,rpt_file in enumerate(rpt_filenames):
-            rpt_idx = cell_cycle_metrics[cell_cycle_metrics['Test name'] == rpt_file].index
+            rpt_idx = cell_cycle_metrics[(cell_cycle_metrics['Test name'] == rpt_file)].index #& (cell_cycle_metrics['Test type'] == 'RPT') #include formation and other files?
             pre_rpt = pd.DataFrame()
             esoh_record_line = -1
+            I_slow = I_C20 #set condition for formation?...
+
             # for each section of the RPT...
             for i in rpt_idx:
                 rpt_subcycle = pd.DataFrame()
@@ -330,7 +333,7 @@ class DataProcessor:
                 rpt_subcycle['Data'] = [cell_data[['Time [ms]', 'Current [A]', 'Voltage [V]', 'Ah throughput [A.h]', 'Temperature [degC]', 'Step index']][(t>t_start) & (t<t_end)]]
                 
                 self.update_cycle_metrics_hppc(rpt_subcycle, cell_cycle_metrics, i, pulse_currents)
-                index_code = self.update_cycle_metrics_esoh(rpt_subcycle, cell_cycle_metrics, i, pre_rpt, esoh_record_line, I_slow = I_C20)
+                index_code = self.update_cycle_metrics_esoh(rpt_subcycle, cell_cycle_metrics, i, pre_rpt, esoh_record_line, I_slow = I_slow, I_threshold = I_threshold)
                 if index_code >= 0:
                     # Update the previous subcycle line and data
                     pre_rpt = rpt_subcycle
@@ -365,7 +368,7 @@ class DataProcessor:
         
         return cell_rpt_data
     
-    def update_cycle_metrics_esoh(self, rpt_subcycle, cell_cycle_metrics, index, pre_subcycle: pd.DataFrame, record_line_index, I_slow):
+    def update_cycle_metrics_esoh(self, rpt_subcycle, cell_cycle_metrics, index, pre_subcycle: pd.DataFrame, record_line_index, I_slow, I_threshold):
         """
         Method used for eSOH calculation
 
@@ -385,8 +388,8 @@ class DataProcessor:
             The RPT dis/charge current magnitude (e.g. C/20) [A]
         """
         # Skip the Formation data
-        if '_F_' in cell_cycle_metrics.loc[index, 'Test name']:
-            return -2
+        # if '_F_' in cell_cycle_metrics.loc[index, 'Test name']:
+        #     return -2
 
         if record_line_index > 0 and rpt_subcycle['Protocol'] == 'HPPC':
             td = (cell_cycle_metrics["Time [ms]"].iloc[index] - cell_cycle_metrics["Time [ms]"].iloc[record_line_index])/1e3/3600
@@ -395,7 +398,7 @@ class DataProcessor:
         
         if rpt_subcycle['Protocol'] == 'C/20 discharge' or  rpt_subcycle['Protocol'] == 'C/20 charge':
             # If there is a previous subcycle, process eSOH
-            if isinstance(pre_subcycle, pd.DataFrame) and pre_subcycle.empty:
+            if isinstance(pre_subcycle, pd.DataFrame) and pre_subcycle.empty: #nor is cell calendar aging!
                 return index
             if isinstance(pre_subcycle, dict) and not bool(pre_subcycle):
                 return index
@@ -411,7 +414,7 @@ class DataProcessor:
                 ch_subcycle = rpt_subcycle
             try:
                 self.logger.info(f"Processing eSOH for {rpt_subcycle['Test name']}")
-                q_data, v_data, dVdQ_data, q_full = self._load_V_data(ch_subcycle, dh_subcycle, I_slow = I_slow,I_threshold= 0.005)
+                q_data, v_data, dVdQ_data, q_full = self._load_V_data(ch_subcycle, dh_subcycle, I_slow = I_slow, I_threshold = I_threshold)
                 theta, cap, err_v, err_dVdQ, p1_err, p2_err, p12_err = self.esoh_est(q_data, v_data, dVdQ_data, q_full, w1=W1, w2=W2, w3=W3, dVdQ_bool=False)
                 if err_v > 20:
                     self.logger.warning(f"Error in V estimation is too high: {err_v}. For {rpt_subcycle['Test name']}")
@@ -437,7 +440,7 @@ class DataProcessor:
             return -1
         return -2
     
-    def _load_V_data(self, ch_rpt, dh_rpt, I_slow, I_threshold, d_int=0.01): # , I_slow = 0.177,I_threshold=0.003default for whatever cell sravan set these currents for...
+    def _load_V_data(self, ch_rpt, dh_rpt, I_slow, I_threshold=0.005, d_int=0.01): # , I_slow = 0.177,I_threshold=0.003default for whatever cell sravan set these currents for...
         """
         Method used for eSOH calculation
         """
@@ -757,6 +760,13 @@ class DataProcessor:
         cell_data_vdf['cycle_indicator'] = pd.array([False]*len(cell_data_vdf))
         cell_data_vdf['cycle_indicator'].iloc[cycle_idx_vdf] = True
 
+        # filter by rate of expansion 
+        # x,y1 = reject_outliers(x0,y0, m=reject_outliers_std)
+        # nonoutlier_idx = np.where(abs(np.diff(y0) - np.mean(np.diff(y0))) < reject_outliers_std * np.std(np.diff(y0)))[0]
+        # x = np.array(x0)[nonoutlier_idx]
+        # y1 = np.array(np.diff(y0))[nonoutlier_idx]
+        # y = [y-min(y1) for y in y1]
+
         # find min/max expansion
         cycle_idx_vdf_minmax = [i for i in cycle_idx_vdf if i is not np.nan]
         cycle_idx_vdf_minmax.append(len(t_vdf)-1) #append end
@@ -865,11 +875,19 @@ class DataProcessor:
                 # Read in timeseries data from test and formating into dataframe. Remove rows with expansion value outliers.
                 self.logger.debug(f"Now Processing {record_vdf['tr_name']}")
                 # df_vdf = test2df(test_vdf, test_trace_keys = ['aux_vdf_timestamp_datetime_0','aux_vdf_ldcsensor_none_0', 'aux_vdf_ldcref_none_0', 'aux_vdf_ambienttemperature_celsius_0', 'aux_vdf_temperature_celsius_0'], df_labels =['Time [ms]','Expansion [-]', 'Expansion ref [-]', 'Amb Temp [degC]', 'Temperature [degC]'])
-                df_vdf = self._record_to_df(record_vdf, test_trace_keys = ['aux_vdf_timestamp_epoch_0','aux_vdf_ldcsensor_none_0', 'aux_vdf_ldcref_none_0', 'aux_vdf_ambienttemperature_celsius_0','aux_vdf_ldcstd_none_0','aux_vdf_refstd_none_0', 'aux_vdf_drivecurrent_none_0'], df_labels =['Time [ms]','Expansion [-]', 'Expansion ref [-]','Temperature [degC]','Expansion STDDEV [cnt]','Ref STDDEV [cnt]','Drive Current [-]'])
-                df_vdf = df_vdf[(df_vdf['Expansion [-]'] >1e1) & (df_vdf['Expansion [-]'] <1e7)] #keep good signals 
+                df_vdf = self._record_to_df(record_vdf, test_trace_keys = ['aux_vdf_timestamp_epoch_0','aux_vdf_ldcsensor_none_0', 'aux_vdf_ldcref_none_0', 'aux_vdf_ambienttemperature_celsius_0','aux_vdf_ldcstd_none_0','aux_vdf_refstd_none_0', 'aux_vdf_drivecurrent_none_0'], df_labels =['Time [ms]','Raw expansion [-]', 'Expansion ref [-]','Temperature [degC]','Expansion STDDEV [cnt]','Ref STDDEV [cnt]','Drive Current [-]'])
+                
+                # Filter data to reduce
+                df_vdf = df_vdf[(df_vdf['Raw expansion [-]'] >1e5) & (df_vdf['Raw expansion [-]'] <1e7)] #keep good signals.
+                fs = 1/5 # sampling frequency
+                fc = 1/(60*60) # cutoff frequency
+                sos = butter(4, fc/(fs/2), 'low', output='sos') #N,Wn
+                df_vdf['Expansion [-]'] = sosfiltfilt(sos, df_vdf['Raw expansion [-]'])
+
                 # Add LDC sensor calibration to df_vdf
                 df_vdf = self._get_calibration_parameters(df_vdf, record_vdf['dev_name'], calibration_parameters)
                 self.logger.info(f"Using calibration parameters for the entire dataframe.")
+                df_vdf['Raw expansion [um]'] = 1000 * (30.6 - (df_vdf['x2'] * (df_vdf['Raw expansion [-]'] / 10**6)**2 + df_vdf['x1'] * (df_vdf['Raw expansion [-]'] / 10**6) + df_vdf['c']))
                 df_vdf['Expansion [um]'] = 1000 * (30.6 - (df_vdf['x2'] * (df_vdf['Expansion [-]'] / 10**6)**2 + df_vdf['x1'] * (df_vdf['Expansion [-]'] / 10**6) + df_vdf['c']))
                 df_vdf['Temperature [degC]'] = np.where((df_vdf['Temperature [degC]'] >= 200) & (df_vdf['Temperature [degC]'] <250), np.nan, df_vdf['Temperature [degC]']) 
                 # df_vdf['Amb Temp [degC]'] = np.where((df_vdf['Amb Temp [degC]'] >= 200) & (df_vdf['Amb Temp [degC]'] <250), np.nan, df_vdf['Amb Temp [degC]']) 
@@ -894,15 +912,15 @@ class DataProcessor:
     def _create_default_cell_cycle_metrics(self):
         return pd.DataFrame(columns=['Time [ms]','Ah throughput [A.h]', 'Test type','Protocol','discharge_cycle_indicator','cycle_indicator','charge_cycle_indicator','capacity_check_indicator', 'Test name','Drive Current [-]','Expansion STDDEV [cnt]','Ref STDDEV [cnt]'])
     def _create_default_cell_data_vdf(self):
-        return pd.DataFrame(columns=['Time [ms]','Expansion [-]', 'Expansion ref [-]', 'Temperature [degC]','cycle_indicator','Drive Current [-]','Expansion STDDEV [cnt]','Ref STDDEV [cnt]'])
+        return pd.DataFrame(columns=['Time [ms]','Raw expansion [-]', 'Expansion [-]', 'Expansion ref [-]', 'Temperature [degC]','cycle_indicator','Drive Current [-]','Expansion STDDEV [cnt]','Ref STDDEV [cnt]'])
 
-    def _process_cycler_data(self, records_neware, cycle_id_lims, project_name, numFiles=1000):
+    def _process_cycler_data(self, records, cycle_id_lims, project_name, numFiles=1000):
         """
         Process cycler data from a list of test records
 
         Parameters
         ----------
-        records_neware: list of dict
+        records: list of dict
             The list of test records
         cycle_id_lims: list of ints
             The cycle number limits for charge, discharge, and total cycles
@@ -920,7 +938,7 @@ class DataProcessor:
         """
 
         # combine data for all files 
-        cell_data, cell_cycle_metrics = self._combine_cycler_data(records_neware, cycle_id_lims, numFiles = numFiles)
+        cell_data, cell_cycle_metrics = self._combine_cycler_data(records, cycle_id_lims, numFiles = numFiles)
         
         # calculate capacities 
         if project_name in PROJECT.keys(): 
@@ -1065,6 +1083,7 @@ class DataProcessor:
                 # Calculate capacity based on AhT.
                 Q = AhT[cycle_idx[i+1]]-AhT[cycle_idx[i]]
                 if(Q>Qmax):
+                    print(Q)
                     Q=np.nan
                     self.logger.warning(f"Invalid Capacity for cycle {i}")
                 if cycle_idx[i] in charge_idx:
@@ -1139,6 +1158,7 @@ class DataProcessor:
             # 2. Reassign to variables
             # assert not test_data.isnull().any().any(), f"Null values found in the data from {record['tr_name']}"
             t = test_data['Time [ms]'].reset_index(drop=True)
+            t_test = test_data['Test Time [ms]'].reset_index(drop=True)
             I = test_data['Current [A]'].reset_index(drop=True)
             V = test_data['Voltage [V]'].reset_index(drop=True)
             T = test_data['Temperature [degC]'].reset_index(drop=True)
@@ -1210,7 +1230,7 @@ class DataProcessor:
 
             else: # find I==0 and filter out irrelevant points
 
-                charge_start_idx_file, discharge_start_idx_file = self._find_cycle_idx(t, I, V, AhT,Ah_Discharge,Ah_Charge,step_ord, step_idx, cycle_idx,test_protocol, V_max_cycle = V_max_cycle, V_min_cycle = V_min_cycle, dt_min = dt_min, dAh_min= dAh_min)
+                charge_start_idx_file, discharge_start_idx_file = self._find_cycle_idx(t_test, I, V, AhT,Ah_Discharge,Ah_Charge,step_ord, step_idx, cycle_idx,test_protocol, V_max_cycle = V_max_cycle, V_min_cycle = V_min_cycle, dt_min = dt_min, dAh_min= dAh_min)
                 
                 try: # won't work for half cycles (files with only charge or only discharge)
                     charge_start_idx_file, discharge_start_idx_file = self._match_charge_discharge(charge_start_idx_file, discharge_start_idx_file)
@@ -1252,17 +1272,50 @@ class DataProcessor:
                 if file_with_capacity_check:
                     if len(np.where(np.diff(np.sign(I_subcycle)))[0])>10: # hppc: ID by # of types of current sign changes (threshold is arbitrary)
                         test_data.loc[data_idx,'Protocol'] = 'HPPC'
-                    elif (t_end-t_start)/3600.0 >8 and  np.mean(I_subcycle) > 0 and  np.mean(I_subcycle) < Qmax / 18: # C/20 charge: longer than 8 hrs and mean(I)>0. Will ID C/10 during formation as C/20...
+                    elif (t_end-t_start)/3600000.0 >8 and  np.mean(I_subcycle) > 0: #and  np.mean(I_subcycle) < Qmax / 18: # C/20 charge: longer than 8 hrs and mean(I)>0. Will ID C/10 during formation as C/20...
                         test_data.loc[data_idx,'Protocol'] = 'C/20 charge'
-                    elif (t_end-t_start)/3600.0 > 8 and  np.mean(I_subcycle) < 0 and  np.mean(I_subcycle) > - Qmax / 18 : # C/20 discharge: longer than 8 hrs and mean(I)<0.Will ID C/10 during formation as C/20...
-                        test_data.loc[data_idx,'Protocol'] = 'C/20 discharge'
+                    elif (t_end-t_start)/3600000.0 > 8 and  np.mean(I_subcycle) < 0:# and  np.mean(I_subcycle) > - Qmax / 18 : # C/20 discharge: longer than 8 hrs and mean(I)<0.Will ID C/10 during formation as C/20...
+                            test_data.loc[data_idx,'Protocol'] = 'C/20 discharge'
             
             # 7. Add to list of dfs where each element is the resulting df from each file.
             self.logger.debug(record['tr_name'] + '   Cycles: ' + str(len(charge_start_idx_file)) + '   AhT: ' + str(round(AhT.iloc[-1],2)))
             self.logger.debug(f"test_data: {test_data}")
-            frames.append(test_data)
+            
+            # 8. Special case for handling UMBL Arbin cycling + rpt files with continuous cycling
+            if ('arbin' in record['tags']) and ('UMBL2022FEB' in record['tr_name'].upper()) and ('P25C' in record['tr_name'].upper()):
+                if 'CYC_P3CP3C' in record['tr_name'].upper():
+                    # find indices of RPT cycles
+                    rpt_idx_charge_start_idx_file = np.where(np.diff(t_test[charge_start_idx_file])/3600>18)[0]
+                    rpt_idx_discharge_start_idx_file = np.where(np.diff(t_test[discharge_start_idx_file])/3600>18)[0]
+                    charge_start_idx_file_rpt = [charge_start_idx_file[r] for r in rpt_idx_charge_start_idx_file]
+                    discharge_start_idx_file_rpt = [discharge_start_idx_file[r] for r in rpt_idx_discharge_start_idx_file]
+
+                    # indicate rpt dis/charge cycles in test_data
+                    test_data.loc[charge_start_idx_file_rpt, 'capacity_check_indicator'] = True
+                    test_data.loc[np.concatenate((charge_start_idx_file_rpt, discharge_start_idx_file_rpt)), 'Test type'] = 'RPT'
+                    
+                    # rerun rpt subcyle identification with test time 
+                    for i in range(0,len(file_cell_cycle_metrics)):
+                        t_start = file_cell_cycle_metrics['Test Time [ms]'].iloc[i]
+                        if i == len(file_cell_cycle_metrics)-1: # if last subcycle, end of subcycle = end of file 
+                            t_end = test_data['Test Time [ms]'].iloc[-1]
+                        else: # end of subcycle = start of next subcycle
+                            t_end = file_cell_cycle_metrics['Test Time [ms]'].iloc[i+1]
+                        I_subcycle = test_data['Current [A]'][(t_test>t_start) & (t_test<t_end)]
+                        data_idx = file_cell_cycle_metrics.index.tolist()[i]
+                        if len(np.where(np.diff(np.sign(I_subcycle)))[0])>10: # hppc: ID by # of types of current sign changes (threshold is arbitrary)
+                            test_data.loc[data_idx,'Protocol'] = 'HPPC'
+                        elif (t_end-t_start)/3600.0 >8 and  np.mean(I_subcycle) > 0: # and  np.mean(I_subcycle) < Qmax / 8: # C/20 charge: longer than 8 hrs and mean(I)>0. Will ID C/10 during formation as C/20... (C/18->c/8)
+                            test_data.loc[data_idx,'Protocol'] = 'C/20 charge'
+                        elif (t_end-t_start)/3600.0 > 8 and  np.mean(I_subcycle) < 0: # and  np.mean(I_subcycle) > - Qmax / 8: # C/20 discharge: longer than 8 hrs and mean(I)<0.Will ID C/10 during formation as C/20...
+                            test_data.loc[data_idx,'Protocol'] = 'C/20 discharge'
+                        else:
+                            pass
+
+            frames.append(test_data)    
     
          #   time.sleep(0.1) 
+
         # Combine cycling data into a single df and reset the index
         self.logger.info(f"Combining {len(frames)} dataframes")
         if len(frames) == 0:

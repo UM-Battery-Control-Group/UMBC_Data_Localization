@@ -256,6 +256,13 @@ class DataIO:
             else:
                 self.logger.error("No valid time column found in dataframe.")          
         return trace_keys
+    
+    def _check_exp_std_column_in_trace_keys(self, df, trace_keys):
+        # Find invalid time columns in trace_keys
+        if ("aux_vdf_ldcstd_none_0" in trace_keys) and ("aux_vdf_ldcstd_none_0" not in df.columns):
+            trace_keys = ["aux_vdf_ldcn_none_0" if (key=="aux_vdf_ldcstd_none_0") and (key not in df.columns) else key for key in trace_keys]
+            self.logger.warning("Expansion stdev key was replaced with aux_vdf_ldcn_none_0.")          
+        return trace_keys
 
     
     def load_df(self, test_folder=None, df_path=None, trace_keys=None):
@@ -288,6 +295,7 @@ class DataIO:
         if trace_keys is not None:
             try:
                 trace_keys = self._check_time_column_in_trace_keys(df, trace_keys)
+                # trace_keys = self._check_exp_std_column_in_trace_keys(df, trace_keys)
 
                 keys_short=[]
                 for key in trace_keys:
@@ -577,7 +585,7 @@ class DataIO:
             c = float(row[c_index]) if row[c_index] != '' else default_C
             cell_name = project + "_CELL" + cell_number.zfill(3)
             if cell_name not in calibration_parameters:
-                calibration_parameters[cell_name] = []
+                calibration_parameters[cell_name] = [] # initialize key with cell name
             calibration_parameters[cell_name].append((start_date, removal_date, x1, x2, c))
         return calibration_parameters
 

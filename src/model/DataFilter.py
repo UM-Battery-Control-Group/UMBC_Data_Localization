@@ -69,7 +69,8 @@ class DataFilter:
             if (device_id is None or record['device_id'] == device_id) and
             (tr_name_substring is None or tr_name_substring.upper() in record['tr_name'].upper()) and
             (start_time is None or abs(datetime.strptime(record['start_time'], DATE_FORMAT) - start_time) <= TIME_TOLERANCE) and
-            (tags is None or all(tag in record['tags'] for tag in tags))
+            (tags is None or all(tag in record['tags'] for tag in tags)) and 
+            (record['project_name'] != 'BAD TESTS')
         ]
         self.logger.info(f"Found {len(matching_records)} matching records")
         return matching_records
