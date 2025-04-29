@@ -7,11 +7,12 @@ import shutil
 import hashlib
 import matplotlib.pyplot as plt
 import csv
+import time
 from src.model.DirStructure import DirStructure
 from src.model.DataDeleter import DataDeleter
 from src.config.time_config import DATE_FORMAT
 from src.config.df_config import TIME_COLUMNS
-from src.config.path_config import ROOT_PATH, SANITY_CHECK_CSV_PATH, WRONG_TR_NAME_PATH
+from src.config.path_config import ROOT_PATH, SANITY_CHECK_CSV_PATH, WRONG_TR_NAME_PATH,ROOT_DATA_PATH
 from src.config.calibration_config import X1, X2, C
 from src.utils.Logger import setup_logger
 from src.utils.RedisClient import RedisClient
@@ -491,7 +492,7 @@ class DataIO:
         cell_data_rpt = self.load_df(df_path=filepath_rpt)
         return cell_cycle_metrics, cell_data, cell_data_vdf, cell_data_rpt
     
-    def save_processed_data(self, cell_name, cell_cycle_metrics, cell_data, cell_data_vdf, cell_data_rpt):
+    def save_processed_data(self, cell_name, cell_cycle_metrics,cell_data_rpt, cell_data = None, cell_data_vdf = None): # cell_data, cell_data_vdf, 
         """
         Save the processed data to the processed folder
 
@@ -512,10 +513,12 @@ class DataIO:
         -------
         None
         """
-        cell_path = self.dirStructure.load_processed_dev_folder(cell_name)
-        if cell_path is None:
-            self.logger.warning(f"No test record for the {cell_name} in our network drive. Please check if the cell name is correct.")
-            return None
+        # cell_path = self.dirStructure.load_processed_dev_folder(cell_name)
+        # if cell_path is None:
+        #     self.logger.warning(f"No test record for the {cell_name} in our network drive. Please check if the cell name is correct.")
+        #     return None
+        project_name = cell_name.split('_')[0]
+        cell_path = os.path.join(ROOT_PATH, project_name, cell_name)
         # Filepaths for cycle metrics, cell data, cell data vdf and rpt
         filepath_ccm = os.path.join(cell_path, 'CCM.pkl.gz')
         filepath_cell_data = os.path.join(cell_path, 'CD.pkl.gz')
@@ -526,15 +529,32 @@ class DataIO:
         ccm_path = self.dirStructure.load_ccm_folder()
         filepath_ccm_pkl = os.path.join(ccm_path, 'pkl', f'{cell_name}_CCM.pkl.gz')
         filepath_ccm_csv = os.path.join(ccm_path, 'csv', f'{cell_name}_CCM.csv')
-        # Save dataframes for cycle metrics, cell data, cell data vdf
-        self.save_df(cell_cycle_metrics, filepath_ccm)
-        self.save_df(cell_data, filepath_cell_data)
-        self.save_df(cell_data_vdf, filepath_cell_data_vdf)
-        self.save_df(cell_data_rpt, filepath_rpt)
-        self.save_df(cell_cycle_metrics, filepath_ccm_pkl)
-        # Save csv for cycle metrics
-        self.save_df_to_csv(cell_cycle_metrics, filepath_csv)
-        self.save_df_to_csv(cell_cycle_metrics, filepath_ccm_csv)
+
+        # Save dataframes and rename old if it already exists
+        dfs = [cell_cycle_metrics]*4 + [cell_data_rpt, cell_data, cell_data_vdf]
+        filepaths = [filepath_ccm, filepath_csv,filepath_ccm_pkl, filepath_ccm_csv, filepath_rpt,filepath_cell_data, filepath_cell_data_vdf]
+        for i,(df, filepath) in enumerate(zip(dfs, filepaths)):
+            if df is not None:
+                #rename old as a copy with (#) appended
+                # if os.path.exists(filepath):  
+                    # path_parts = os.path.split(filepath)
+                    # count = self.count_files_with_substring(path_parts[0], path_parts[1])
+                    # last_modified_date = time.strftime(r"%Y%m%d_%H%M%S",time.strptime(time.ctime(os.path.getmtime(filepath))))
+                    # tail_parts = path_parts[1].split(".")
+                    # tail_parts[0] = tail_parts[0] + f'({last_modified_date})'
+                    # filepath2 = os.path.join(cell_path, '.'.join(tail_parts)) 
+                    # os.rename(filepath, filepath2)
+                if '.csv' in filepath: 
+                    self.save_df_to_csv(df, filepath)
+                else:
+                    self.save_df(df, filepath)
+
+    def count_files_with_substring(self,directory, substring):
+        count = 0
+        for filename in os.listdir(directory):
+            if substring in filename:
+                count += 1
+        return count
 
     def load_ccm_csv(self, cell_name):
         """

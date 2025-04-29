@@ -8,13 +8,10 @@ from src.utils.Logger import setup_logger
 from src.utils.SinglentonMeta import SingletonMeta
 from src.utils.DateConverter import DateConverter
 from src.presenter.Presenter import Presenter
-from src.config.path_config import ROOT_DATA_PATH, ROOT_PATH
-import gzip
-import pickle
 import os
 import gc
 import re
-import pandas as pd
+
 
 class DataManager(metaclass=SingletonMeta):
     """
@@ -443,7 +440,7 @@ class DataManager(metaclass=SingletonMeta):
         return cell_cycle_metrics, cell_data, cell_data_vdf
 
 
-    def process_cell(self, cell_name, start_time=None, end_time=None, numFiles = 1000, reset = False, reprocess_data = False):
+    def process_cell(self, cell_name, start_time=None, end_time=None, numFiles = 1000, reset = False):
         """
         Process the data for a cell and save the processed data to local disk
 
@@ -473,125 +470,47 @@ class DataManager(metaclass=SingletonMeta):
         project_name: str
             Name of project that the cell belongs to
         """
+        cell_name = cell_name.upper()
+        cell_cycle_metrics, cell_data, cell_data_vdf = None, None, None
+        if not reset:
+            cell_cycle_metrics, cell_data, cell_data_vdf, _ = self.load_processed_data(cell_name)
+    
+        records_neware = self.dataFilter.filter_records(tr_name_substring=cell_name, tags=['neware_xls_4000'])
+        records_arbin = self.dataFilter.filter_records(tr_name_substring=cell_name, tags=['arbin'])
+        records_biologic = self.dataFilter.filter_records(tr_name_substring=cell_name, tags=['biologic'])
+        records_vdf = self.dataFilter.filter_records(tr_name_substring=cell_name, tags=['vdf'])     
+        # Sort trs
+        records_neware = self.dataProcessor.sort_records(records_neware)
+        records_arbin = self.dataProcessor.sort_records(records_arbin)
+        records_biologic = self.dataProcessor.sort_records(records_biologic)
+        records_cycler = self.dataProcessor.sort_records(records_neware + records_arbin + records_biologic)
+        records_vdf = self.dataProcessor.sort_records(records_vdf)
+
+        # Get parameters for calibration
+        calibration_parameters = None
+        try:
+            calibration_parameters = self.dataIO.get_calibration_parameters()
+        except Exception as e:
+            self.logger.error(f'Error {e} while getting calibration parameters')
 
         # Process data
-        project_name = cell_name.split('_')[0] #self.dirStructure.cell_to_project(cell_name)
-        updated_data = False
-
-        # Load and reprocess timeseries cycler data to ID cycles, and fit esoh with updated algo
-        if reprocess_data: 
-            file_path = os.path.join(ROOT_DATA_PATH, project_name, cell_name, 'cell_data.pkl.gz')
-            # load cycler data 
-            self.logger.info(f"Loading cell data pickle file from {file_path}")
-            with gzip.open(file_path, "rb") as f:
-                cell_data = pickle.load(f)
-                cell_data.rename(columns={
-                    "time": "Test Time [ms]",
-                    "capacity(ah)": 'Ah throughput [A.h]',
-                    'cycle type': 'Test type',
-                    "protocol": 'Protocol',
-                    "test name": "Test name",
-                    'chg. cap.(ah)': 'Charge Ah throughput [A.h]',
-                    'dchg. cap.(ah)': 'Discharge Ah throughput [A.h]',
-                    'current(a)':'Current [A]', 
-                    'voltage(v)':'Voltage [V]', 
-                    # :'Ah throughput [A.h]', 
-                    # :'Temperature [degC]', 
-                    'step index':'Step index'
-                    }, inplace = True)
-                cell_data['Time [ms]'] = cell_data.timestamp.astype('int64')// 10**6 # epoch timestep in ms
-            self.logger.info(f"Done loading cell data pickle file from {file_path}")
-            
-            # load vdf data
-            file_path = os.path.join(ROOT_DATA_PATH, project_name, cell_name, 'cell_data_vdf.pkl.gz')
-            self.logger.info(f"Loading cell data vdf pickle file from {file_path}")
-            with gzip.open(file_path, "rb") as f:
-                cell_data_vdf = pickle.load(f) 
-                cell_data_vdf.rename(columns={
-                    "time": "Test Time [ms]",
-                    "timestamp": "Time [ms]",
-                    "capacity(ah)": 'Ah throughput [A.h]',
-                    "expansion": 'Expansion [-]',
-                    "expansion (um)":'Expansion [um]',
-                    # :"Drive Current [-]"
-                    "expansion stddev (cnt)": 'Expansion STDDEV [cnt]',
-                    'ref stddev (cnt)': 'Ref STDDEV [cnt]',
-                    "ref n": 'Expansion ref [-]',
-                    'temperature (celsius)': 'Temperature [degC]',# guessing which is cell and which is amb based on plots...
-                    'temperature (c)': 'Amb Temp [degC]'
-                    }, inplace = True)  
-            self.logger.info(f"Done loading cell data vdf pickle file from {file_path}")
-            
-            # reprocess cell_data and ccm to id missing cycles
-            cell_cycle_metrics, cell_data, cell_data_vdf, updated_data = self.dataProcessor.process_cell(cell_data = cell_data, cell_data_vdf= cell_data_vdf, project_name=project_name)
-            cell_data_rpt,cell_cycle_metrics = self.dataProcessor.summarize_rpt_data_2(cell_cycle_metrics, project_name, cell_data = cell_data, cell_data_vdf = cell_data_vdf ) #cell_data, cell_data_vdf,
-            self.dataIO.save_processed_data(cell_name, cell_cycle_metrics=cell_cycle_metrics,cell_data_rpt=cell_data_rpt, cell_data=cell_data, cell_data_vdf=cell_data_vdf)        
-        
-        # FOR NEWARE CELLS: Load cell rpt data and fit esoh with updated algo 
-        # Load and reprocess pickled RPT data
-        update_RPT = not updated_data #True
-        # if update_RPT: 
-        # file_path = os.path.join(ROOT_DATA_PATH, project_name, cell_name, 'cell_data_rpt.pkl.gz') #cell_data_rpt.pkl.gz
-        file_path = os.path.join(ROOT_PATH, project_name, cell_name, 'RPT.pkl.gz') #cell_data_rpt.pkl.gz 'RPT.pkl.gz'
-        if os.path.exists(file_path) and update_RPT:
-            self.logger.info(f"Loading rpt data pickle file from {file_path}")
-            with gzip.open(file_path, "rb") as f: # no time/ timestamp/ Time [ms]
-                cell_data_rpt = pickle.load(f)
-                if "cell_data_rpt.pkl.gz" in file_path: 
-                    cell_data_rpt.rename(columns={
-                        "time": "Time [ms]",
-                        "capacity(ah)": 'Ah throughput [A.h]',
-                        'cycle type': 'Test type',
-                        "protocol": 'Protocol',
-                        "test name": "Test name",
-                        'chg. cap.(ah)': 'Charge capacity [A.h]',
-                        'dchg. cap.(ah)': 'Discharge capacity [A.h]',
-                        }, inplace = True)
-                    for data in cell_data_rpt.Data: 
-                        data.rename(columns={
-                        "capacity(ah)": 'Ah throughput [A.h]',
-                        'current(a)':'Current [A]', 
-                        'voltage(v)':'Voltage [V]',
-                        'step index':'Step index'  
-                        }, inplace = True)
-                        data['Time [ms]'] = pd.to_datetime(data['timestamp']).map(pd.Timestamp.timestamp)
-
-            # load ccm
-            file_path = os.path.join(ROOT_DATA_PATH, project_name, cell_name, 'cell_cycle_metrics.pkl.gz') #cell_data_rpt.pkl.gz
-            file_path = os.path.join(ROOT_PATH, project_name, cell_name, 'CCM.pkl.gz') #cell_cycle_metrics.pkl.gz
-            self.logger.info(f"Loading CCM pickle file from {file_path}")
-            with gzip.open(file_path, "rb") as f:
-                cell_cycle_metrics = pickle.load(f)
-                cell_cycle_metrics.rename(columns={
-                    "time": "Time [ms]",
-                    "capacity(ah)": 'Ah throughput [A.h]',
-                    'cycle type': 'Test type',
-                    "protocol": 'Protocol',
-                    "test name": "Test name",
-                    'chg. cap.(ah)': 'Charge capacity [A.h]',
-                    'dchg. cap.(ah)': 'Discharge capacity [A.h]',
-                    'min cycle temperature (c)': 'Min cycle temperature [degC]',
-                    'max cycle temperature (c)': 'Max cycle temperature [degC]',
-                    'min cycle expansion': 'Min cycle expansion',
-                    'max cycle expansion': 'Max cycle expansion',
-                    'reversible expansion': 'Reversible cycle expansion',
-                    'min cycle expansion (um)': 'Min cycle expansion [um]',
-                    'max cycle expansion (um)':'Max cycle expansion [um]',
-                    'reversible expansion (um)': 'Reversible cycle expansion [um]',
-                    }, inplace = True)
-
-            self.logger.info(f"Loaded pickle file from {file_path} successfully")
+        project_name = self.dirStructure.cell_to_project(cell_name)
+        cell_cycle_metrics, cell_data, cell_data_vdf, update = self.dataProcessor.process_cell(records_cycler, records_vdf, project_name, cell_cycle_metrics, cell_data, cell_data_vdf, calibration_parameters, numFiles)
+        #Save new data to pickle if there was new data
+        cell_data_rpt = None
+        if update:
             self.logger.info(f'Updating processed data for cell {cell_name}...')
-            cell_data_rpt,cell_cycle_metrics = self.dataProcessor.summarize_rpt_data_2(cell_cycle_metrics, project_name, cell_rpt_data = cell_data_rpt) #cell_data, cell_data_vdf,
-            self.dataIO.save_processed_data(cell_name, cell_cycle_metrics,  cell_data_rpt) #cell_data, cell_data_vdf,
+            # project_name = self.dirStructure.cell_to_project(cell_name)
+            cell_data_rpt,cell_cycle_metrics = self.dataProcessor.summarize_rpt_data_2(cell_data, cell_data_vdf, cell_cycle_metrics, project_name)
+            self.dataIO.save_processed_data(cell_name, cell_cycle_metrics, cell_data, cell_data_vdf, cell_data_rpt)
 
-        # # Present the data
-        # fig_1, fig_2, fig_3 = self.presenter.update(cell_name, cell_cycle_metrics, cell_data, cell_data_vdf, cell_data_rpt, start_time, end_time)
-        # time_name = f"{start_time}To{end_time}" if start_time and end_time else ""
+        # Present the data
+        fig_1, fig_2, fig_3 = self.presenter.update(cell_name, cell_cycle_metrics, cell_data, cell_data_vdf, cell_data_rpt, start_time, end_time)
+        time_name = f"{start_time}To{end_time}" if start_time and end_time else ""
 
-        # self.save_figs([fig_1, fig_2, fig_3], cell_name, time_name, keep_open=True)
+        self.save_figs([fig_1, fig_2, fig_3], cell_name, time_name, keep_open=True)
 
-        return cell_cycle_metrics, cell_data_rpt, project_name
+        return cell_cycle_metrics, cell_data, cell_data_vdf, cell_data_rpt, project_name
     
     def process_project(self, project_name, numFiles = 1000):
         """

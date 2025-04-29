@@ -45,28 +45,35 @@ def consistency_test():
 
 def process_cell_test():
     # test process_cell
-    umbl_cell_nums_neware = [152065,152041,152046,152057,152078,152033,152088,152036,152084,152085,152047,152072,152048, 152097, 152091,152051,152087,152042,152094,152045,152054,152039,]
-    umbl_cell_nums_arbin = [152066, 152060, 152069,152061, 152093,152076,152052,152079,152089,152063,152068,152075,152055,152050,152067,152077,152059,152056,152058,152053,152082] #152070, 152062, 152086
-    umbl_cell_nums = [152048] #umbl_cell_nums_arbin + umbl_cell_nums_neware 
-    # done = 152070, 152062, 152086
+    umbl_cell_nums_neware = [152045,152054,152039,152041,152065,152046,152057,152078,152033,152088,152036,152084,152085,152047,152072,152048, 152097, 152091,152051,152087,152042,152094]
+    umbl_cell_nums_arbin = [152070, 152062, 152086, 152060, 152069,152061, 152093,152076,152052,152079,152089,152063,152068,152075,152055,152050,152067,152077,152059,152056,152058,152053,152082, 152066]
+    # umbl_cell_nums_cal = [152077,152059,152056] #152048, 152072,152077,152059,152056
+    # umbl_cell_nums = [152085]#, 152088, 152061,] #152097]
+    # umbl_cell_nums = [152091, 152033, 152036, 152047, 152057, 152078, 152084, 152085, 152088, ] # missing formation 
+    # umbl_cell_nums = umbl_cell_nums_neware + umbl_cell_nums_arbin
+    # umbl_cell_nums = [152088] #,152041, 152054, 152039, 152065, : 152054 cold c/3 example with updated initial sigma; 152041, 152088 = 2C hot with growing Cp
+    # umbl_cell_nums = [152042, 152091,] #2C cold cells
+    # umbl_cell_nums = [152039, 152045, 152051, 152054, 152065, 152087, 152094, 152097] # c/3 cold cells
+    # umbl_cell_nums = [152051]#152084, 152085,152088,] # missing formation 152057, 
+    umbl_cell_nums = [152033, 152036, 152046, 152047, 152057, 152078, 152084, 152085] # hot C/3 reduce Cn ub to avoid jumping up
+
     # LLI/LAM error cells
-    # umbl_cell_nums = [152056, 152059, 152077, 152052, 152055, 152068, 152075, 152079, 152082, 152050, 152062, 152067, 152039]
     umbl_cells = ['UMBL2022FEB' +'_CELL' + f'{cell:03d}' for cell in umbl_cell_nums]
-    # cell_names = ["GMFEB23S_CELL003"]
+    # cell_names = ["GMJuly2022_CELL011"]
     # cell_names=["GMJuly2022_CELL"+f'{cell_num:03d}' for cell_num in range(21,50) ]
     # cell_names=["GMFEB23S_CELL"+f'{cell_num:03d}' for cell_num in range(5,77) ]
+
     cell_names = umbl_cells
 
     cell_errors = [] # init list of dict with cell name and error message
     for cell_name in cell_names:
         try:
-            viewer = Viewer()
-            presenter = Presenter(viewer=viewer)
+            viewer = Viewer() 
+            presenter = Presenter(viewer=viewer)    
             dataManager = DataManager(presenter=presenter ,use_redis=False)
 
             # test process_cell
-
-            cell_cycle_metrics, cell_data, cell_data_vdf, cell_data_rpt, junk = dataManager.process_cell(cell_name, reset=True);#, reset=True)#, start_time='2023-07-01_00-00-00', end_time='2023-07-28_23-59-59')
+            cell_cycle_metrics, cell_data_rpt, junk = dataManager.process_cell(cell_name, reset=True, reprocess_data = False)#, reset=True)#, start_time='2023-07-01_00-00-00', end_time='2023-07-28_23-59-59')cell_data, cell_data_vdf, 
         #    cell_cycle_metrics, cell_data, cell_data_vdf, cell_data_rpt = dataManager.process_cell(cell_name, reset=True, start_time='2022-09-13_10-00-00', end_time='2022-09-24_10-00-00');#, reset=True)#)
         except Exception as error:
             print("An exception occurred:", error) 

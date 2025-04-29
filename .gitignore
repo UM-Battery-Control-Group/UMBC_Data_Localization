@@ -20,3 +20,5 @@ __pycache__/
 
 UMBLDL/
 UMBLDL.tgz
+
+path_config.py
